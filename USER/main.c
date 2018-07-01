@@ -1,8 +1,9 @@
 #include "led.h"
 #include "delay.h"
 #include "sys.h"
+#include "usart.h"
 #include "lcd.h"
-#include "usart1.h"	   
+#include "usart2.h"	   
 #include "gps.h"
 #include "string.h"
 #include "key.h"
@@ -11,6 +12,7 @@
 //技术支持：www.openedv.com
 //广州市星翼电子科技有限公司  
  
+u8 USART1_TX_BUF[USART2_MAX_RECV_LEN]; 					//串口1,发送缓存区
 nmea_msg gpsx; 											//GPS信息
 __align(4) u8 dtbuf[50];   								//打印缓存器
 const u8*fixmode_tbl[4]={"Fail","Fail"," 2D "," 3D "};	//fix mode字符串 
@@ -47,31 +49,32 @@ void Gps_Msg_Show(void)
 	sprintf((char *)dtbuf,"UTC Time:%02d:%02d:%02d   ",gpsx.utc.hour,gpsx.utc.min,gpsx.utc.sec);	//显示UTC时间
   	LCD_ShowString(30,290,200,16,16,dtbuf);		  
 }	 
-//暂存数组
-u8 TEMP_BUF[USART1_MAX_RECV_LEN];
  int main(void)
  { 
 	u16 i,rxlen;
 	u16 lenx;
-	u8 key; 
-	delay_init();			//延时函数初始化	 
-	NVIC_PriorityGroupConfig(NVIC_PriorityGroup_2); //设置NVIC中断分组2:2位抢占优先级，2位响应优先级
- 	USART1_Init(38400);		//初始化串口1
-	LED_Init();				//初始化与LED连接的硬件接口 
-    LCD_Init();				//初始化LCD
-  	POINT_COLOR=RED;
+	u8 key=0XFF;
+	u8 upload=0;
+	delay_init();	    	 //延时函数初始化	  
+	uart_init(38400);	 	//串口初始化为9600
+	USART2_Init(38400);	//初始化串口2
+	LED_Init();				//初始化与LED连接的硬件接口
+	KEY_Init();				//初始化与LED连接的硬件接口
+   LCD_Init();				//初始化LCD
+ 	POINT_COLOR=RED;
 	LCD_ShowString(30,20,200,16,16,"ALIENTEK STM32 ^_^");	
 	LCD_ShowString(30,40,200,16,16,"NE0-6M GPS TEST");	
-	LCD_ShowString(30,60,200,16,16,"ATOM@ALIENTEK"); 	 										   	   
-   	LCD_ShowString(30,80,200,16,16,"2014/3/16");   
+	LCD_ShowString(30,60,200,16,16,"ATOM@ALIENTEK");
+	LCD_ShowString(30,80,200,16,16,"KEY0:Upload NMEA Data SW");   	 										   	   
+   	LCD_ShowString(30,100,200,16,16,"NMEA Data Upload:OFF");   
 	if(Ublox_Cfg_Rate(1000,1)!=0)	//设置定位信息更新速度为1000ms,顺便判断GPS模块是否在位. 
 	{
    		LCD_ShowString(30,120,200,16,16,"NEO-6M Setting...");
 		while((Ublox_Cfg_Rate(1000,1)!=0)&&key)	//持续判断,直到可以检查到NEO-6M,且数据保存成功
 		{
-			USART1_Init(9600);				//初始化串口1波特率为9600(EEPROM没有保存数据的时候,波特率为9600.)
+			USART2_Init(9600);				//初始化串口2波特率为9600(EEPROM没有保存数据的时候,波特率为9600.)
 	  		Ublox_Cfg_Prt(38400);			//重新设置模块的波特率为38400
-			USART1_Init(38400);				//初始化串口1波特率为38400 
+			USART2_Init(38400);				//初始化串口2波特率为38400 
 			Ublox_Cfg_Tp(1000000,100000,1);	//设置PPS为1秒钟输出1次,脉冲宽度为100ms	    
 			key=Ublox_Cfg_Cfg_Save();		//保存配置  
 		}	  					 
@@ -82,16 +85,25 @@ u8 TEMP_BUF[USART1_MAX_RECV_LEN];
 	while(1) 
 	{		
 		delay_ms(1);
-		if(USART1_RX_STA&0X8000)		//接收到一次数据了
+		if(USART2_RX_STA&0X8000)		//接收到一次数据了
 		{
-			rxlen=USART1_RX_STA&0X7FFF;	//得到数据长度
-			for(i=0;i<rxlen;i++)TEMP_BUF[i]=USART1_RX_BUF[i];	   
- 			USART1_RX_STA=0;		   	//启动下一次接收
-			TEMP_BUF[i]=0;				//自动添加结束符
-			GPS_Analysis(&gpsx,(u8*)TEMP_BUF);//分析字符串
-			Gps_Msg_Show();				//显示信息	 
- 		} 
+			rxlen=USART2_RX_STA&0X7FFF;	//得到数据长度
+			for(i=0;i<rxlen;i++)USART1_TX_BUF[i]=USART2_RX_BUF[i];	   
+ 			USART2_RX_STA=0;		   	//启动下一次接收
+			USART1_TX_BUF[i]=0;			//自动添加结束符
+			GPS_Analysis(&gpsx,(u8*)USART1_TX_BUF);//分析字符串
+			Gps_Msg_Show();				//显示信息	
+			if(upload)printf("\r\n%s\r\n",USART1_TX_BUF);//发送接收到的数据到串口1
+ 		}
+		key=KEY_Scan(0);
+		if(key==KEY0_PRES)
+		{
+			upload=!upload;
+			POINT_COLOR=RED;
+			if(upload)LCD_ShowString(30,100,200,16,16,"NMEA Data Upload:ON ");
+			else LCD_ShowString(30,100,200,16,16,"NMEA Data Upload:OFF");
+ 		}
 		if((lenx%500)==0)LED0=!LED0; 	    				 
 		lenx++;	
-	}			
+	}											    
 }	
